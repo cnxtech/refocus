@@ -16,6 +16,8 @@
 const constants = require('../constants');
 const dbErrors = require('../dbErrors');
 const Op = require('sequelize').Op;
+const sampleStore = require('../../cache/sampleStore');
+const redisOps = require('../../cache/redisOps');
 const fourByteBase = 2;
 const fourByteExponent = 31;
 const fourByteLimit = Math.pow(fourByteBase, fourByteExponent);
@@ -93,12 +95,12 @@ function inRange(val, range) {
  * @param {Aspect} aspect - The associated aspect which provides the ranges are
  *  used to determine the status to assign
  * @param {String} value - The value to evaluate.
- * @returns {String} status, based on the value and the aspect status
+ * @returns {Promise} status, based on the value and the aspect status
  *  ranges
  */
-function computeStatus(aspect, value) {
+function computeStatus(aspectName, value) { // need to work out the logic with Jon
   // Invalid if no aspect or if value is not a non-empty string!
-  if (!aspect || typeof value !== 'string' || value.length === 0) {
+  if (!aspectName || typeof value !== 'string' || value.length === 0) {
     return constants.statuses.Invalid;
   }
 
@@ -110,7 +112,7 @@ function computeStatus(aspect, value) {
   let num;
 
   // Boolean value type: Case-insensitive 'true'
-  if (value.toLowerCase() === 'true') {
+  if (value.toLowerCase() === 'true') { // do we still need this?
     num = 1;
   } else if (value.toLowerCase() === 'false') {
     // Boolean value type: Case-insensitive 'false'
@@ -124,17 +126,16 @@ function computeStatus(aspect, value) {
     return constants.statuses.Invalid;
   }
 
-  if (inRange(num, aspect.criticalRange)) {
-    return constants.statuses.Critical;
-  } else if (inRange(num, aspect.warningRange)) {
-    return constants.statuses.Warning;
-  } else if (inRange(num, aspect.infoRange)) {
-    return constants.statuses.Info;
-  } else if (inRange(num, aspect.okRange)) {
-    return constants.statuses.OK;
-  }
+  const aspRangesKey = sampleStore.toKey(redisOps.aspectRangesType,
+    aspectName);
 
-  return constants.statuses.Invalid;
+  // !!! need to test this
+  return redisOps.executeCommand(
+    ['zrangebyscore', aspRangesKey, num, '+inf LIMIT 0 1'])
+    .then((rangeStatus) => {
+      return rangeStatus.split('-')[0];
+    })
+    .catch(() => constants.statuses.Invalid);
 } // computeStatus
 
 /**
